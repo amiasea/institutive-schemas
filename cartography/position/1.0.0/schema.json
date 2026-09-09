@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/amiasea/institutive-schemas/main/cartography/position/1.0.0/schema.json",
+  "title": "Institutive Cartography Position",
+  "description": "Schema for a statically defined Institutive Cartography Position.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "order",
+    "milestone"
+  ],
+  "properties": {
+    "order": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The ordinal position of the Milestone within the Course."
+    },
+    "milestone": {
+      "$ref": "https://raw.githubusercontent.com/amiasea/institutive-schemas/main/cartography/milestone/1.0.0/schema.json",
+      "description": "The single Milestone realized at this Position."
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cartography/milestone/1.0.0",
+  "title": "Institutive Cartography Milestone",
+  "description": "Schema for a statically defined Institutive Cartography Milestone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "description",
+    "claims"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The identity and semantic name of the Milestone.",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "description": {
+      "type": "string",
+      "description": "The semantic definition of the Milestone."
+    },
+    "claims": {
+      "type": "array",
+      "description": "The Claims required by the Milestone contract.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

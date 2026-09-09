@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/amiasea/institutive-schemas/main/cartography/course/1.0.0/schema.json",
+  "title": "Institutive Cartography Course",
+  "description": "Schema for a statically defined, fully composed Institutive Cartography Course configuration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "positions"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The identity and semantic name of the Course.",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "positions": {
+      "type": "array",
+      "description": "The ordered Positions comprising the Course.",
+      "minItems": 1,
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/amiasea/institutive-schemas/main/cartography/position/1.0.0/schema.json"
+      },
+      "uniqueItemProperties": [
+        "order"
+      ],
+      "uniqueItemPropertyPaths": [
+        "/milestone/name"
+      ]
+    }
+  }
+}
