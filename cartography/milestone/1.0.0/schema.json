@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "cartography/milestone/1.0.0",
+  "$id": "https://raw.githubusercontent.com/amiasea/institutive-schemas/main/cartography/milestone/1.0.0/schema.json",
   "title": "Institutive Cartography Milestone",
   "description": "Schema for a statically defined Institutive Cartography Milestone.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "name",
+    "version",
     "description",
     "claims"
   ],
@@ -15,6 +16,11 @@
       "type": "string",
       "description": "The identity and semantic name of the Milestone.",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "description": "The semantic version of the Milestone definition.",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
     },
     "description": {
       "type": "string",
