@@ -1,0 +1,445 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-schemas:
+    name: Validate ${{ matrix.schema_specification }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every top-level directory listed here uses the same
+          # schema specification and therefore the same validator.
+          #
+          # Additional top-level directories that use JSON Schema
+          # should be added to this group rather than creating
+          # separate matrix entries.
+          - schema_specification: json-schema
+            schema_paths: |
+              cartography
+            validator: ajv
+
+          # Example of another schema specification:
+          #
+          # - schema_specification: <schema-specification>
+          #   schema_paths: |
+          #     <top-level-directory>
+          #     <another-top-level-directory>
+          #   validator: <validator>
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Determine changed schema paths
+        id: changes
+        shell: bash
+        env:
+          SCHEMA_PATHS: ${{ matrix.schema_paths }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            changed_files="$(
+              git diff --name-only \
+                "${{ github.event.pull_request.base.sha }}" \
+                "${{ github.event.pull_request.head.sha }}"
+            )"
+          elif [[ -n "${{ github.event.before }}" &&
+                  "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            changed_files="$(
+              git diff --name-only \
+                "${{ github.event.before }}" \
+                "${{ github.sha }}"
+            )"
+          else
+            changed_files="$(
+              git ls-tree -r --name-only "${{ github.sha }}"
+            )"
+          fi
+
+          changed=false
+
+          while IFS= read -r schema_path; do
+            [[ -n "$schema_path" ]] || continue
+
+            if printf '%s\n' "$changed_files" |
+              grep -q "^${schema_path}/"; then
+              changed=true
+              break
+            fi
+          done <<< "$SCHEMA_PATHS"
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      #
+      # JSON Schema / Ajv validation group
+      #
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.changed == 'true' && matrix.validator == 'ajv'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install Ajv
+        if: steps.changes.outputs.changed == 'true' && matrix.validator == 'ajv'
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/ajv"
+          cd "$RUNNER_TEMP/ajv"
+
+          npm init --yes
+          npm install \
+            ajv \
+            ajv-formats \
+            ajv-keywords
+
+      - name: Validate versioned schema structure
+        if: steps.changes.outputs.changed == 'true' && matrix.validator == 'ajv'
+        env:
+          NODE_PATH: ${{ runner.temp }}/ajv/node_modules
+          SCHEMA_PATHS: ${{ matrix.schema_paths }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const schemaPaths = process.env.SCHEMA_PATHS
+            .split('\n')
+            .map(value => value.trim())
+            .filter(Boolean);
+
+          const semverPattern =
+            /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+          for (const schemaPath of schemaPaths) {
+            if (!fs.existsSync(schemaPath)) {
+              throw new Error(
+                `Schema path does not exist: ${schemaPath}`
+              );
+            }
+
+            const families = fs.readdirSync(schemaPath, {
+              withFileTypes: true
+            }).filter(entry => entry.isDirectory());
+
+            for (const familyEntry of families) {
+              const family = familyEntry.name;
+              const familyPath = path.join(
+                schemaPath,
+                family
+              );
+
+              const versions = fs.readdirSync(familyPath, {
+                withFileTypes: true
+              }).filter(entry => entry.isDirectory());
+
+              if (versions.length === 0) {
+                throw new Error(
+                  `No schema versions found: ${familyPath}`
+                );
+              }
+
+              for (const versionEntry of versions) {
+                const version = versionEntry.name;
+                const versionPath = path.join(
+                  familyPath,
+                  version
+                );
+                const schemaFile = path.join(
+                  versionPath,
+                  'schema.json'
+                );
+
+                if (!semverPattern.test(version)) {
+                  throw new Error(
+                    `Invalid schema version directory: ${versionPath}`
+                  );
+                }
+
+                if (!fs.existsSync(schemaFile)) {
+                  throw new Error(
+                    `Missing schema.json: ${schemaFile}`
+                  );
+                }
+
+                let schema;
+
+                try {
+                  schema = JSON.parse(
+                    fs.readFileSync(schemaFile, 'utf8')
+                  );
+                } catch (error) {
+                  throw new Error(
+                    `Invalid JSON: ${schemaFile}\n${error.message}`
+                  );
+                }
+
+                if (
+                  typeof schema.$id !== 'string' ||
+                  schema.$id.length === 0
+                ) {
+                  throw new Error(
+                    `Schema is missing $id: ${schemaFile}`
+                  );
+                }
+
+                const expectedSuffix =
+                  `/${schemaPath}/${family}/${version}/schema.json`;
+
+                if (!schema.$id.endsWith(expectedSuffix)) {
+                  throw new Error(
+                    [
+                      `Schema $id does not correspond to its versioned path: ${schemaFile}`,
+                      `Expected suffix: ${expectedSuffix}`,
+                      `Actual $id: ${schema.$id}`
+                    ].join('\n')
+                  );
+                }
+
+                console.log(
+                  `Structure valid: ${schemaFile}`
+                );
+              }
+            }
+          }
+          NODE
+
+      - name: Validate latest schemas with Ajv
+        if: steps.changes.outputs.changed == 'true' && matrix.validator == 'ajv'
+        env:
+          NODE_PATH: ${{ runner.temp }}/ajv/node_modules
+          SCHEMA_PATHS: ${{ matrix.schema_paths }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const Ajv2020 = require('ajv/dist/2020');
+          const addFormats = require('ajv-formats');
+          const addKeywords = require('ajv-keywords');
+
+          const schemaPaths = process.env.SCHEMA_PATHS
+            .split('\n')
+            .map(value => value.trim())
+            .filter(Boolean);
+
+          const ajv = new Ajv2020({
+            strict: true,
+            allErrors: true
+          });
+
+          addFormats(ajv);
+          addKeywords(ajv, ['uniqueItemProperties']);
+
+          /*
+           * uniqueItemPropertyPaths is an Amiasea-specific
+           * validation keyword used by the Course schema.
+           *
+           * The schema declares the validation requirement.
+           * This harness provides the implementation used by Ajv.
+           */
+          ajv.addKeyword({
+            keyword: 'uniqueItemPropertyPaths',
+            type: 'array',
+            schemaType: 'array',
+            errors: true,
+
+            compile(paths) {
+              function getValue(object, pointer) {
+                let value = object;
+
+                for (const segment of pointer
+                  .replace(/^\/+/, '')
+                  .split('/')) {
+
+                  if (segment === '') {
+                    continue;
+                  }
+
+                  const decoded = segment
+                    .replace(/~1/g, '/')
+                    .replace(/~0/g, '~');
+
+                  if (
+                    value === null ||
+                    value === undefined
+                  ) {
+                    return undefined;
+                  }
+
+                  value = value[decoded];
+                }
+
+                return value;
+              }
+
+              function validate(data) {
+                if (!Array.isArray(data)) {
+                  return true;
+                }
+
+                for (const pointer of paths) {
+                  const seen = new Set();
+
+                  for (const item of data) {
+                    const value = getValue(item, pointer);
+
+                    if (value === undefined) {
+                      continue;
+                    }
+
+                    const serialized = JSON.stringify(value);
+
+                    if (seen.has(serialized)) {
+                      validate.errors = [{
+                        instancePath: '',
+                        schemaPath:
+                          '#/uniqueItemPropertyPaths',
+                        keyword:
+                          'uniqueItemPropertyPaths',
+                        params: {
+                          pointer
+                        },
+                        message:
+                          `items must have unique values at ${pointer}`
+                      }];
+
+                      return false;
+                    }
+
+                    seen.add(serialized);
+                  }
+                }
+
+                return true;
+              }
+
+              return validate;
+            }
+          });
+
+          function compareSemVerDescending(a, b) {
+            const parse = value => {
+              const match = value.match(
+                /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)/
+              );
+
+              if (!match) {
+                throw new Error(
+                  `Invalid SemVer: ${value}`
+                );
+              }
+
+              return [
+                Number(match[1]),
+                Number(match[2]),
+                Number(match[3])
+              ];
+            };
+
+            const av = parse(a);
+            const bv = parse(b);
+
+            for (let index = 0; index < 3; index++) {
+              if (av[index] !== bv[index]) {
+                return bv[index] - av[index];
+              }
+            }
+
+            return 0;
+          }
+
+          for (const schemaPath of schemaPaths) {
+            const families = fs.readdirSync(schemaPath, {
+              withFileTypes: true
+            }).filter(entry => entry.isDirectory());
+
+            for (const familyEntry of families) {
+              const family = familyEntry.name;
+              const familyPath = path.join(
+                schemaPath,
+                family
+              );
+
+              const versions = fs.readdirSync(familyPath, {
+                withFileTypes: true
+              }).filter(entry => entry.isDirectory())
+                .map(entry => entry.name)
+                .sort(compareSemVerDescending);
+
+              if (versions.length === 0) {
+                throw new Error(
+                  `No schema versions found: ${familyPath}`
+                );
+              }
+
+              const latest = versions[0];
+
+              const schemaFile = path.join(
+                familyPath,
+                latest,
+                'schema.json'
+              );
+
+              const schema = JSON.parse(
+                fs.readFileSync(schemaFile, 'utf8')
+              );
+
+              console.log(
+                `Validating latest ${schemaPath}/${family}/${latest}/schema.json`
+              );
+
+              try {
+                ajv.compile(schema);
+              } catch (error) {
+                console.error(
+                  `Schema validation failed: ${schemaFile}`
+                );
+
+                console.error(error.message);
+
+                if (error.errors) {
+                  console.error(
+                    ajv.errorsText(error.errors, {
+                      separator: '\n'
+                    })
+                  );
+                }
+
+                process.exit(1);
+              }
+
+              console.log(
+                `Schema valid: ${schemaFile}`
+              );
+            }
+          }
+          NODE
+
+      - name: Report unchanged schema group
+        if: steps.changes.outputs.changed != 'true'
+        run: |
+          echo "No files changed under any path in the ${{ matrix.schema_specification }} validation group."
+          echo "Skipping ${{ matrix.schema_specification }} validation."
